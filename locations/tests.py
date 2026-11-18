@@ -15,7 +15,6 @@ class LocationAPITests(APITestCase):
         cls.location_data = {
             "name": "City park",
             "description": "A park by the river.",
-            "category": cls.category.pk,
             "address": "Riverside Street 1",
             "latitude": "48.464717",
             "longitude": "35.046183",
@@ -23,8 +22,9 @@ class LocationAPITests(APITestCase):
         cls.location = Location.objects.create(
             author=cls.owner,
             category=cls.category,
-            **{key: value for key, value in cls.location_data.items() if key != "category"},
+            **cls.location_data,
         )
+        cls.location_data["category"] = cls.category.pk
         cls.detail_url = f"/api/locations/{cls.location.pk}/"
 
     def test_guest_can_read_but_cannot_create(self):

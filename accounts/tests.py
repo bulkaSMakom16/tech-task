@@ -64,3 +64,12 @@ class SessionAuthenticationTests(APITestCase):
         response = self.client.post("/api/auth/login/", self.credentials, format="json")
         self.assertEqual(response.status_code, 403)
         self.assertNotIn(settings.SESSION_COOKIE_NAME, self.client.cookies)
+
+    def test_registration_requires_csrf_for_guest(self):
+        response = self.client.post(
+            "/api/auth/register/",
+            {**self.credentials, "email": "walker@example.com"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(get_user_model().objects.filter(username="walker").exists())

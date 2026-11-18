@@ -1,7 +1,8 @@
 from django.contrib.auth import authenticate, login, logout
 from django.http import JsonResponse
+from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
-from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
+from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_GET
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -11,25 +12,36 @@ from .serializers import LoginSerializer, RegistrationSerializer
 
 
 @require_GET
-@ensure_csrf_cookie
 def csrf_cookie(request):
+    get_token(request)
     return JsonResponse({"detail": "CSRF cookie set."})
 
 
+# Login and registration need a CSRF check even for guests.
 @method_decorator(csrf_protect, name="dispatch")
-class RegisterView(generics.CreateAPIView):
+class PublicAccountView(generics.GenericAPIView):
     permission_classes = [permissions.AllowAny]
+
+
+class RegisterView(PublicAccountView):
     serializer_class = RegistrationSerializer
 
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-@method_decorator(csrf_protect, name="dispatch")
-class LoginView(APIView):
-    permission_classes = [permissions.AllowAny]
+
+class LoginView(PublicAccountView):
+    serializer_class = LoginSerializer
 
     def post(self, request):
-        serializer = LoginSerializer(data=request.data)
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = authenticate(request, **serializer.validated_data)
+        username = serializer.validated_data["username"]
+        password = serializer.validated_data["password"]
+        user = authenticate(request, username=username, password=password)
         if user is None:
             return Response(
                 {"detail": "Invalid username or password."},

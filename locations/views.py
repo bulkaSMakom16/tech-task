@@ -1,6 +1,5 @@
 from django.db.models.deletion import ProtectedError
-from django.utils import timezone
-from rest_framework import permissions, status, viewsets
+from rest_framework import status, viewsets
 from rest_framework.response import Response
 
 from .models import Category, Location
@@ -14,13 +13,16 @@ class CategoryViewSet(viewsets.ModelViewSet):
     permission_classes = [CategoryPermission]
 
     def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
         try:
-            return super().destroy(request, *args, **kwargs)
+            category.delete()
         except ProtectedError:
             return Response(
                 {"detail": "This category is assigned to a location."},
                 status=status.HTTP_409_CONFLICT,
             )
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class LocationViewSet(viewsets.ModelViewSet):
@@ -28,11 +30,10 @@ class LocationViewSet(viewsets.ModelViewSet):
         "-created_at", "-pk"
     )
     serializer_class = LocationSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly, LocationPermission]
+    permission_classes = [LocationPermission]
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
 
     def perform_destroy(self, location):
-        location.deleted_at = timezone.now()
-        location.save(update_fields=["deleted_at", "updated_at"])
+        location.soft_delete()

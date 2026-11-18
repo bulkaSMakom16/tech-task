@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 
 class Category(models.Model):
@@ -13,7 +14,11 @@ class Category(models.Model):
 class Location(models.Model):
     name = models.CharField(max_length=150)
     description = models.TextField()
-    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="locations")
+    category = models.ForeignKey(
+        Category,
+        on_delete=models.PROTECT,
+        related_name="locations",
+    )
     address = models.CharField(max_length=255)
     latitude = models.DecimalField(
         max_digits=9,
@@ -36,3 +41,7 @@ class Location(models.Model):
 
     def __str__(self):
         return self.name
+
+    def soft_delete(self):
+        self.deleted_at = timezone.now()
+        self.save(update_fields=["deleted_at", "updated_at"])
