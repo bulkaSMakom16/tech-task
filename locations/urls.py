@@ -5,6 +5,6 @@ from .views import CategoryViewSet, LocationViewSet
 
 router = DefaultRouter()
 router.register("categories", CategoryViewSet)
-router.register("locations", LocationViewSet)
+router.register("locations", LocationViewSet, basename="location")
 
 urlpatterns = router.urls

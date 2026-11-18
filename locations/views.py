@@ -27,11 +27,12 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
 
 class LocationViewSet(viewsets.ModelViewSet):
-    queryset = Location.objects.filter(deleted_at__isnull=True).order_by(
-        "-created_at", "-pk"
-    )
     serializer_class = LocationSerializer
     permission_classes = [IsAuthenticatedOrReadOnly, LocationOwnerPermission]
+
+    def get_queryset(self):
+        locations = Location.objects.filter(deleted_at__isnull=True)
+        return locations.order_by("-created_at", "-pk")
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)

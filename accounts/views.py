@@ -2,8 +2,9 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.forms import PasswordResetForm
 from django.http import JsonResponse
 from django.middleware.csrf import get_token
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_protect
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_safe
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -63,4 +64,9 @@ def password_reset(request):
         return Response(form.errors, status=400)
 
     form.save(request=request, use_https=request.is_secure())
-    return Response({"detail": "If the email is registered, you will receive a reset link."})
+    return Response({"detail": "if the email is registered, youll receive a reset link"})
+
+
+@require_safe
+def password_reset_done(request):
+    return render(request, "accounts/password_reset_complete.html")
