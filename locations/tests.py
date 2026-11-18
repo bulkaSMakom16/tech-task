@@ -37,6 +37,17 @@ class LocationAPITests(APITestCase):
     def setUp(self):
         cache.clear()
 
+    def create_location(self, name, category, author, description="A place to visit."):
+        return Location.objects.create(
+            name=name,
+            description=description,
+            category=category,
+            address="Main street 1",
+            latitude="48.464717",
+            longitude="35.046183",
+            author=author,
+        )
+
     def test_guest_can_read_but_cannot_create(self):
         self.assertEqual(self.client.get("/api/locations/").status_code, 200)
         self.assertEqual(self.client.get(self.detail_url).status_code, 200)
@@ -71,11 +82,13 @@ class LocationAPITests(APITestCase):
         self.location.refresh_from_db()
         self.assertIsNotNone(self.location.deleted_at)
         self.assertEqual(self.client.get(self.detail_url).status_code, 404)
-        self.assertEqual(self.client.get("/api/locations/").data, [])
+        self.assertEqual(self.client.get("/api/locations/").data["results"], [])
 
     def test_category_access_and_deletion(self):
         url = "/api/categories/"
-        self.assertEqual(self.client.get(url).status_code, 200)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["results"][0]["id"], self.category.pk)
         self.client.force_login(self.owner)
         self.assertEqual(self.client.post(url, {"name": "Museums"}).status_code, 403)
 
@@ -123,7 +136,7 @@ class LocationAPITests(APITestCase):
 
         self.client.force_login(self.admin)
         self.assertEqual(self.client.post(url, {"value": "dislike"}).status_code, 201)
-        review_data = self.client.get(self.reviews_url).data[0]
+        review_data = self.client.get(self.reviews_url).data["results"][0]
         self.assertEqual(review_data["like_count"], 1)
         self.assertEqual(review_data["dislike_count"], 1)
 
@@ -164,9 +177,102 @@ class LocationAPITests(APITestCase):
 
         response = self.client.get("/api/locations/")
         self.assertEqual(response.status_code, 200)
-        location = response.data[0]
+        location = response.data["results"][0]
         self.assertEqual(location["rating"], 4)
         self.assertEqual(location["review_count"], 2)
         self.assertEqual(location["views_last_7_days"], 3)
         self.assertEqual(location["popularity"], 13)
         self.assertEqual(LocationVisit.objects.count(), 4)
+
+    def test_location_search_filters_and_ordering(self):
+        museums = Category.objects.create(name="Museums")
+        museum = self.create_location(
+            "City museum", museums, self.other_user, "See the photo exhibit."
+        )
+        Review.objects.create(location=museum, author=self.owner, rating=5, comment="Nice museum.")
+        Review.objects.create(
+            location=self.location, author=self.owner, rating=3, comment="Fine park."
+        )
+        for _ in range(5):
+            LocationVisit.objects.create(location=self.location)
+
+        url = "/api/locations/"
+        response = self.client.get(url, {"search": "photo"})
+        self.assertEqual(response.data["results"][0]["id"], museum.pk)
+        self.assertEqual(response.data["count"], 1)
+
+        filters = {
+            "search": "park",
+            "category": self.category.pk,
+            "author": self.owner.pk,
+            "rating": 3,
+        }
+        response = self.client.get(url, filters)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["id"], self.location.pk)
+        filters["rating"] = 5
+        self.assertEqual(self.client.get(url, filters).data["count"], 0)
+
+        for ordering, first_id in (
+            ("created_at", self.location.pk),
+            ("-created_at", museum.pk),
+            ("-rating", museum.pk),
+            ("-popularity", self.location.pk),
+        ):
+            response = self.client.get(url, {"ordering": ordering})
+            self.assertEqual(response.data["results"][0]["id"], first_id)
+
+    def test_location_pages_have_stable_order_for_equal_ratings(self):
+        for number in range(11):
+            self.create_location(f"Park {number}", self.category, self.owner)
+
+        url = "/api/locations/"
+        first = self.client.get(url, {"ordering": "rating"})
+        second = self.client.get(first.data["next"])
+
+        self.assertEqual(first.data["count"], 12)
+        self.assertEqual(len(first.data["results"]), 10)
+        self.assertEqual(first.data["results"][0]["name"], "Park 10")
+        self.assertEqual(len(second.data["results"]), 2)
+        self.assertEqual(second.data["results"][-1]["id"], self.location.pk)
+        self.assertIsNone(second.data["next"])
+
+    def test_location_list_cache_refreshes_after_writes(self):
+        url = "/api/locations/"
+        first = self.client.get(url)
+        self.assertEqual(first.data["results"][0]["name"], "City park")
+        self.location.name = "Updated directly"
+        self.location.save(update_fields=["name"])
+        cached = self.client.get(url)
+        self.assertEqual(cached.data["results"][0]["name"], "City park")
+
+        self.client.force_login(self.owner)
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(url, self.location_data, format="json")
+        self.assertEqual(response.status_code, 201)
+        new_location_id = response.data["id"]
+        self.assertEqual(self.client.get(url).data["count"], 2)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.patch(self.detail_url, {"name": "Updated in API"})
+        self.assertEqual(response.status_code, 200)
+        updated = self.client.get(url, {"search": "Updated in API"})
+        self.assertEqual(updated.data["results"][0]["name"], "Updated in API")
+
+        self.assertEqual(self.client.get(url, {"rating": 5}).data["count"], 0)
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self.reviews_url, {"rating": 5, "comment": "Nice park."})
+        self.assertEqual(response.status_code, 201)
+        rated = self.client.get(url, {"rating": 5})
+        self.assertEqual(rated.data["results"][0]["rating"], 5)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.get(self.detail_url)
+        visited = self.client.get(url, {"rating": 5})
+        self.assertEqual(visited.data["results"][0]["views_last_7_days"], 1)
+
+        self.assertEqual(self.client.get(url).data["count"], 2)
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(f"{url}{new_location_id}/")
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(self.client.get(url).data["count"], 1)
