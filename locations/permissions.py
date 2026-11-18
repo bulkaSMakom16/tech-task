@@ -1,4 +1,4 @@
-from rest_framework.permissions import SAFE_METHODS, BasePermission, IsAuthenticatedOrReadOnly
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 
 class CategoryPermission(BasePermission):
@@ -6,7 +6,7 @@ class CategoryPermission(BasePermission):
         return request.method in SAFE_METHODS or request.user.is_staff
 
 
-class LocationPermission(IsAuthenticatedOrReadOnly):
+class LocationOwnerPermission(BasePermission):
     def has_object_permission(self, request, view, location):
         if request.method in SAFE_METHODS or request.user.is_staff:
             return True

@@ -1,11 +1,11 @@
 from django.urls import path
 
-from .views import LoginView, LogoutView, RegisterView, csrf_cookie
+from .views import csrf_cookie, login_user, logout_user, register_user
 
 
 urlpatterns = [
     path("csrf/", csrf_cookie, name="csrf-cookie"),
-    path("register/", RegisterView.as_view(), name="register"),
-    path("login/", LoginView.as_view(), name="login"),
-    path("logout/", LogoutView.as_view(), name="logout"),
+    path("register/", register_user, name="register"),
+    path("login/", login_user, name="login"),
+    path("logout/", logout_user, name="logout"),
 ]

@@ -1,9 +1,10 @@
 from django.db.models.deletion import ProtectedError
 from rest_framework import status, viewsets
+from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 
 from .models import Category, Location
-from .permissions import CategoryPermission, LocationPermission
+from .permissions import CategoryPermission, LocationOwnerPermission
 from .serializers import CategorySerializer, LocationSerializer
 
 
@@ -30,7 +31,7 @@ class LocationViewSet(viewsets.ModelViewSet):
         "-created_at", "-pk"
     )
     serializer_class = LocationSerializer
-    permission_classes = [LocationPermission]
+    permission_classes = [IsAuthenticatedOrReadOnly, LocationOwnerPermission]
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
