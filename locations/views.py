@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pandas as pd
 from django.core.cache import cache
+from django.core.mail import send_mass_mail
 from django.db import DatabaseError, transaction
 from django.db.models import Avg, Count, F, OuterRef, Q, Subquery
 from django.db.models.deletion import ProtectedError
@@ -21,7 +22,7 @@ from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnl
 from rest_framework.response import Response
 
 from .filters import LocationFilter, LocationOrderingFilter
-from .models import Category, Location, LocationVisit, Review, ReviewVote
+from .models import Category, Location, LocationSubscription, LocationVisit, Review, ReviewVote
 from .permissions import CategoryPermission, LocationOwnerPermission
 from .serializers import (
     CategorySerializer,
@@ -51,10 +52,52 @@ def clear_location_list_cache():
 
 def csv_text(value):
     formula_prefixes = ("=", "+", "-", "@", "＝", "＋", "－", "＠")
-    if value.startswith(("\t", "\r", "\n")) or value.lstrip().startswith(formula_prefixes):
+    starts_with_tab_or_newline = value.startswith(("\t", "\r", "\n"))
+    text = value.lstrip()
+    starts_with_formula = text.startswith(formula_prefixes)
+    if starts_with_tab_or_newline or starts_with_formula:
         return "'" + value
 
     return value
+
+
+def locations_to_csv(locations):
+    columns = LocationSerializer.Meta.fields
+    table = pd.DataFrame(locations, columns=columns)
+
+    for column in ("name", "description", "address"):
+        table[column] = table[column].map(csv_text)
+
+    return table.to_csv(index=False, quoting=QUOTE_ALL, lineterminator="\r\n")
+
+
+def send_review_notifications(review, reviews_url):
+    location = review.location
+    subscriptions = location.subscriptions.filter(user__is_active=True)
+    subscriptions = subscriptions.exclude(user__email="")
+    emails = list(subscriptions.values_list("user__email", flat=True))
+
+    author = location.author
+    if author.is_active and author.email:
+        emails.append(author.email)
+
+    subject = "New review for a location"
+    body = f"A new review was added to {location.name}.\n"
+    body += f"Rating: {review.rating}/5.\n"
+    body += f"Reviews: {reviews_url}"
+
+    messages = []
+    used_emails = set()
+    for email in emails:
+        email_key = email.lower()
+        if email_key in used_emails:
+            continue
+
+        messages.append((subject, body, None, [email]))
+        used_emails.add(email_key)
+
+    if messages:
+        send_mass_mail(messages)
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -85,7 +128,10 @@ class LocationViewSet(viewsets.ModelViewSet):
     ordering_fields = ["created_at", "rating", "popularity"]
 
     def get_queryset(self):
+        locations = Location.objects.filter(deleted_at__isnull=True)
         week_ago = timezone.now() - timedelta(days=7)
+
+        # Count visits separately to get the correct total for locations with several reviews.
         visits = LocationVisit.objects.filter(
             location_id=OuterRef("pk"),
             created_at__gte=week_ago,
@@ -94,7 +140,6 @@ class LocationViewSet(viewsets.ModelViewSet):
         visits = visits.annotate(total=Count("id"))
         visit_count = Subquery(visits.values("total"))
 
-        locations = Location.objects.filter(deleted_at__isnull=True)
         locations = locations.annotate(
             rating=Avg("reviews__rating", default=0.0),
             review_count=Count("reviews"),
@@ -129,7 +174,7 @@ class LocationViewSet(viewsets.ModelViewSet):
     def export(self, request, *args, **kwargs):
         file_type = request.query_params.get("file_type", "json")
         if file_type not in ("json", "csv"):
-            return Response({"detail": "Choose json or csv."}, status=400)
+            return Response({"detail": "сhoose json or csv."}, status=400)
 
         locations = self.get_queryset()
         locations = self.filter_queryset(locations)
@@ -137,11 +182,7 @@ class LocationViewSet(viewsets.ModelViewSet):
         data = serializer.data
 
         if file_type == "csv":
-            table = pd.DataFrame(data, columns=LocationSerializer.Meta.fields)
-            for column in ("name", "description", "address"):
-                table[column] = table[column].map(csv_text)
-
-            csv_data = table.to_csv(index=False, quoting=QUOTE_ALL, lineterminator="\r\n")
+            csv_data = locations_to_csv(data)
             response = HttpResponse(csv_data, content_type="text/csv; charset=utf-8")
         else:
             response = JsonResponse(data, safe=False, json_dumps_params={"ensure_ascii": False})
@@ -233,8 +274,37 @@ def location_reviews(request, location_id):
         )
 
     transaction.on_commit(clear_location_list_cache, robust=True)
+    reviews_url = request.build_absolute_uri(request.path)
+
+    def send_notifications():
+        send_review_notifications(review, reviews_url)
+
+    transaction.on_commit(send_notifications, robust=True)
     serializer = ReviewSerializer(review)
     return Response(serializer.data, status=201)
+
+
+@api_view(["POST", "DELETE"])
+@permission_classes([IsAuthenticated])
+def location_subscription(request, location_id):
+    location = get_object_or_404(Location, pk=location_id, deleted_at__isnull=True)
+    user = request.user
+
+    if request.method == "DELETE":
+        LocationSubscription.objects.filter(location=location, user=user).delete()
+        return Response(status=204)
+
+    if not user.email:
+        return Response({"detail": "An email address is required to subscribe."}, status=400)
+
+    _, created = LocationSubscription.objects.get_or_create(
+        location=location,
+        user=user,
+    )
+    if created:
+        return Response({"subscribed": True}, status=201)
+
+    return Response({"subscribed": True})
 
 
 @api_view(["POST"])

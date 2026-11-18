@@ -3,12 +3,13 @@ from datetime import timedelta
 from io import StringIO
 
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.cache import cache
 from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
 
-from .models import Category, Location, LocationVisit, Review
+from .models import Category, Location, LocationSubscription, LocationVisit, Review
 
 
 @override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
@@ -326,3 +327,63 @@ class LocationAPITests(APITestCase):
 
         response = self.client.get(url, {"file_type": "xml"})
         self.assertEqual(response.status_code, 400)
+
+    def test_subscription_requires_login_and_can_be_removed(self):
+        url = f"{self.detail_url}subscription/"
+        self.assertEqual(self.client.post(url).status_code, 403)
+        self.assertEqual(self.client.delete(url).status_code, 403)
+
+        self.client.force_login(self.other_user)
+        self.assertEqual(self.client.post(url).status_code, 400)
+        self.other_user.email = "visitor@example.com"
+        self.other_user.save(update_fields=["email"])
+
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data["subscribed"])
+        self.assertEqual(self.client.post(url).status_code, 200)
+        self.assertEqual(
+            LocationSubscription.objects.filter(
+                location=self.location,
+                user=self.other_user,
+            ).count(),
+            1,
+        )
+
+        self.assertEqual(self.client.delete(url).status_code, 204)
+        self.assertEqual(self.client.delete(url).status_code, 204)
+        self.assertFalse(LocationSubscription.objects.exists())
+        self.location.soft_delete()
+        self.assertEqual(self.client.post(url).status_code, 404)
+
+    def test_new_review_emails_author_and_subscribers_once(self):
+        self.owner.email = "owner@example.com"
+        self.owner.save(update_fields=["email"])
+        self.other_user.email = "visitor@example.com"
+        self.other_user.save(update_fields=["email"])
+        self.admin.email = "admin@example.com"
+        self.admin.save(update_fields=["email"])
+
+        LocationSubscription.objects.create(location=self.location, user=self.owner)
+        LocationSubscription.objects.create(location=self.location, user=self.other_user)
+        LocationSubscription.objects.create(location=self.location, user=self.admin)
+
+        self.client.force_login(self.admin)
+        self.client.delete(f"{self.detail_url}subscription/")
+        data = {"rating": 5, "comment": "Nice park."}
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self.reviews_url, data)
+            self.assertEqual(len(mail.outbox), 0)
+
+        self.assertEqual(response.status_code, 201)
+        recipients = [message.to for message in mail.outbox]
+        self.assertCountEqual(recipients, [[self.owner.email], [self.other_user.email]])
+        for message in mail.outbox:
+            self.assertIn(self.location.name, message.body)
+            self.assertIn("5/5", message.body)
+            self.assertIn(self.reviews_url, message.body)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(self.reviews_url, data)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(len(mail.outbox), 2)

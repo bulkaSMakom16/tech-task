@@ -92,3 +92,20 @@ class LocationVisit(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["location", "created_at"])]
+
+
+class LocationSubscription(models.Model):
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.CASCADE,
+        related_name="subscriptions",
+    )
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["location", "user"],
+                name="one_subscription_per_location_and_user",
+            ),
+        ]
