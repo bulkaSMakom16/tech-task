@@ -1,17 +1,20 @@
+from csv import QUOTE_ALL
 from datetime import timedelta
 from hashlib import sha256
 from uuid import uuid4
 
+import pandas as pd
 from django.core.cache import cache
 from django.db import DatabaseError, transaction
 from django.db.models import Avg, Count, F, OuterRef, Q, Subquery
 from django.db.models.deletion import ProtectedError
 from django.db.models.functions import Coalesce
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.filters import SearchFilter
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
@@ -32,15 +35,26 @@ LIST_VERSION_KEY = "locations:list:version"
 
 
 def location_list_cache_key(request):
-    new_version = uuid4().hex
+    new_version = str(uuid4())
     version = cache.get_or_set(LIST_VERSION_KEY, new_version, timeout=None)
+
     url = request.build_absolute_uri()
-    url_hash = sha256(url.encode("utf-8")).hexdigest()
+    url_bytes = url.encode("utf-8")
+    url_hash = sha256(url_bytes).hexdigest()
+
     return f"locations:list:{version}:{url_hash}"
 
 
 def clear_location_list_cache():
     cache.delete(LIST_VERSION_KEY)
+
+
+def csv_text(value):
+    formula_prefixes = ("=", "+", "-", "@", "＝", "＋", "－", "＠")
+    if value.startswith(("\t", "\r", "\n")) or value.lstrip().startswith(formula_prefixes):
+        return "'" + value
+
+    return value
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -93,7 +107,7 @@ class LocationViewSet(viewsets.ModelViewSet):
         return locations
 
     def filter_queryset(self, queryset):
-        if self.action == "list":
+        if self.action in ("list", "export"):
             return super().filter_queryset(queryset)
 
         return queryset
@@ -109,6 +123,30 @@ class LocationViewSet(viewsets.ModelViewSet):
 
         response = super().list(request, *args, **kwargs)
         cache.set(cache_key, response.data, timeout=60)
+        return response
+
+    @action(detail=False, methods=["get"])
+    def export(self, request, *args, **kwargs):
+        file_type = request.query_params.get("file_type", "json")
+        if file_type not in ("json", "csv"):
+            return Response({"detail": "Choose json or csv."}, status=400)
+
+        locations = self.get_queryset()
+        locations = self.filter_queryset(locations)
+        serializer = self.get_serializer(locations, many=True)
+        data = serializer.data
+
+        if file_type == "csv":
+            table = pd.DataFrame(data, columns=LocationSerializer.Meta.fields)
+            for column in ("name", "description", "address"):
+                table[column] = table[column].map(csv_text)
+
+            csv_data = table.to_csv(index=False, quoting=QUOTE_ALL, lineterminator="\r\n")
+            response = HttpResponse(csv_data, content_type="text/csv; charset=utf-8")
+        else:
+            response = JsonResponse(data, safe=False, json_dumps_params={"ensure_ascii": False})
+
+        response["Content-Disposition"] = f'attachment; filename="locations.{file_type}"'
         return response
 
     def perform_create(self, serializer):

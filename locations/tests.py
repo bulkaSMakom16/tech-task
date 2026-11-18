@@ -1,4 +1,6 @@
+from csv import DictReader
 from datetime import timedelta
+from io import StringIO
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -276,3 +278,51 @@ class LocationAPITests(APITestCase):
             response = self.client.delete(f"{url}{new_location_id}/")
         self.assertEqual(response.status_code, 204)
         self.assertEqual(self.client.get(url).data["count"], 1)
+
+    def test_export_json_applies_filters_to_all_locations(self):
+        for number in range(11):
+            self.create_location(f"Park {number}", self.category, self.owner)
+
+        museums = Category.objects.create(name="Museums")
+        self.create_location("Museum park", museums, self.other_user)
+        self.location.soft_delete()
+
+        response = self.client.get(
+            "/api/locations/export/",
+            {"category": self.category.pk, "ordering": "created_at", "page": 2},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Disposition"], 'attachment; filename="locations.json"')
+        locations = response.json()
+        self.assertEqual(len(locations), 11)
+        self.assertEqual(locations[0]["name"], "Park 0")
+        self.assertEqual(locations[-1]["name"], "Park 10")
+
+    def test_export_csv_preserves_unicode_and_writes_formula_as_text(self):
+        self.location.name = "Парк, Дніпро"
+        self.location.description = '  =1+1\r\nРядок з "лапками"'
+        self.location.save()
+
+        response = self.client.get("/api/locations/export/", {"file_type": "csv"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+        self.assertEqual(response["Content-Disposition"], 'attachment; filename="locations.csv"')
+        csv_data = response.content.decode("utf-8")
+        rows = list(DictReader(StringIO(csv_data, newline="")))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], self.location.name)
+        self.assertEqual(rows[0]["description"], "'" + self.location.description)
+        self.assertEqual(rows[0]["latitude"], "48.464717")
+
+    def test_empty_csv_keeps_columns_and_invalid_format_returns_400(self):
+        url = "/api/locations/export/"
+        response = self.client.get(url, {"file_type": "csv", "search": "missing location"})
+        self.assertEqual(response.status_code, 200)
+        csv_data = response.content.decode("utf-8")
+        rows = DictReader(StringIO(csv_data))
+        self.assertIn("name", rows.fieldnames)
+        self.assertIn("popularity", rows.fieldnames)
+        self.assertEqual(list(rows), [])
+
+        response = self.client.get(url, {"file_type": "xml"})
+        self.assertEqual(response.status_code, 400)
