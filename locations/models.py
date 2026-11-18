@@ -45,3 +45,50 @@ class Location(models.Model):
     def soft_delete(self):
         self.deleted_at = timezone.now()
         self.save(update_fields=["deleted_at", "updated_at"])
+
+
+class Review(models.Model):
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name="reviews")
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    rating = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+    )
+    comment = models.TextField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["location", "author"],
+                name="one_review_per_location_and_author",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(rating__gte=1, rating__lte=5),
+                name="review_rating_between_1_and_5",
+            ),
+        ]
+
+
+class ReviewVote(models.Model):
+    LIKE = "like"
+    DISLIKE = "dislike"
+    VOTE_CHOICES = [(LIKE, "Like"), (DISLIKE, "Dislike")]
+
+    review = models.ForeignKey(Review, on_delete=models.CASCADE, related_name="votes")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    value = models.CharField(max_length=7, choices=VOTE_CHOICES)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["review", "user"],
+                name="one_vote_per_review_and_user",
+            ),
+        ]
+
+
+class LocationVisit(models.Model):
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name="visits")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["location", "created_at"])]
