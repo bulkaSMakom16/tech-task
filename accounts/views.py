@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.forms import PasswordResetForm
 from django.http import JsonResponse
 from django.middleware.csrf import get_token
 from django.views.decorators.csrf import csrf_protect
@@ -13,14 +14,16 @@ from .serializers import LoginSerializer, RegistrationSerializer
 @require_GET
 def csrf_cookie(request):
     get_token(request)
-    return JsonResponse({"detail": "CSRF cookie set."})
+    return JsonResponse({"detail": "csrf set."})
 
 
 @api_view(["POST"])
 @csrf_protect
 def register_user(request):
     serializer = RegistrationSerializer(data=request.data)
-    serializer.is_valid()
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
+
     serializer.save()
     return Response(serializer.data, status=201)
 
@@ -29,13 +32,15 @@ def register_user(request):
 @csrf_protect
 def login_user(request):
     serializer = LoginSerializer(data=request.data)
-    serializer.is_valid()
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
+
     username = serializer.validated_data["username"]
     password = serializer.validated_data["password"]
     user = authenticate(request, username=username, password=password)
     if user is None:
         return Response(
-            {"detail": "Invalid username or password."},
+            {"detail": "invalid user or pass."},
             status=400,
         )
 
@@ -48,3 +53,14 @@ def login_user(request):
 def logout_user(request):
     logout(request)
     return Response(status=204)
+
+
+@api_view(["POST"])
+@csrf_protect
+def password_reset(request):
+    form = PasswordResetForm(request.data)
+    if not form.is_valid():
+        return Response(form.errors, status=400)
+
+    form.save(request=request, use_https=request.is_secure())
+    return Response({"detail": "If the email is registered, you will receive a reset link."})

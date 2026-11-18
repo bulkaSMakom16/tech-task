@@ -1,6 +1,7 @@
+from django.contrib.auth.views import PasswordResetCompleteView, PasswordResetConfirmView
 from django.urls import path
 
-from .views import csrf_cookie, login_user, logout_user, register_user
+from .views import csrf_cookie, login_user, logout_user, password_reset, register_user
 
 
 urlpatterns = [
@@ -8,4 +9,15 @@ urlpatterns = [
     path("register/", register_user, name="register"),
     path("login/", login_user, name="login"),
     path("logout/", logout_user, name="logout"),
+    path("password-reset/", password_reset, name="password_reset"),
+    path(
+        "password-reset/done/",
+        PasswordResetCompleteView.as_view(template_name="accounts/password_reset_complete.html"),
+        name="password_reset_complete",
+    ),
+    path(
+        "password-reset/<uidb64>/<token>/",
+        PasswordResetConfirmView.as_view(),
+        name="password_reset_confirm",
+    ),
 ]
