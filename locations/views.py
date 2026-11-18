@@ -1,5 +1,5 @@
 from django.db.models.deletion import ProtectedError
-from rest_framework import status, viewsets
+from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 
@@ -20,10 +20,10 @@ class CategoryViewSet(viewsets.ModelViewSet):
         except ProtectedError:
             return Response(
                 {"detail": "This category is assigned to a location."},
-                status=status.HTTP_409_CONFLICT,
+                status=409,
             )
 
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(status=204)
 
 
 class LocationViewSet(viewsets.ModelViewSet):

@@ -31,7 +31,6 @@ class LocationSerializer(serializers.ModelSerializer):
         for field, value in validated_data.items():
             setattr(instance, field, value)
             fields_to_save.append(field)
-
-        # Saving only these fields preserves a simultaneous soft delete.
+            
         instance.save(update_fields=fields_to_save)
         return instance
